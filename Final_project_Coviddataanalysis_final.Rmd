@@ -1,0 +1,419 @@
+---
+title: "Covid_Analysis_finalProject"
+author: "Sweekar bengaluru"
+date: "29/01/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+INTRODUCTION:
+
+  Coronavirus pandemic that started in 2019 continues to hamper day to day normal functions. New variants that are detected in different parts of globe, have caused considerable damage to human life and economic progress. At the same time, there are various claims and counter claims surrounding coronavirus.
+In this code, an attempt is made to debunk such claims. Whether case fatality ratio is strongly tied to economic development of particular country, whether vaccination has helped reduce death counts assuming variants were equally potent as before, whether coronavirus affects only the aged population.
+In addition to these analysis, general analysis on daily case count, death counts, total counts, case fatality ratios are analysed and plotted. Worst afected countried by different parameters are tabulated. Impact of covid is visulaised on the world map.
+Attempt is also made to separate out and analyse Omicron impact in these plots.
+
+Data Source: Two data sources are relied for this data analysis.
+One is from John hopkins institute data, https://github.com/CSSEGISandData/COVID-19
+The other source is from Owid(Our world in data) which has count on economics, population which is gathered from UN, World Bank etc.
+https://github.com/owid/covid-19-data/blob/master/public/data/README.md
+
+Packages used: ggplot,tidyr,dplyr,lubridate,readr,maps
+
+CONTENT:  
+INTRODUCTION  
+DATA IMPORT  
+Section 1: WORLD DATA  
+Section 2: WORST AFFECTED COUNTRIES  
+Section 3: IMPACT OF OMICRON VARIANT  
+Section 4: PLOTTING IMPACT ON WORLD MAP  
+Section 5: SOCIO ECONOMIC DATASET GENERATION  
+Section 6: GOVERNMENT MEASURES  
+Section 7: VACCINATIONS AND AGE  
+Section 8: ECONOMIC DEVELOPMENT  
+SUMMARY  
+
+
+COVID 19 DATA ANALYSIS:
+
+Cleanup code
+```{r}
+rm(list=ls())
+```
+
+Install packages
+```{r}
+pkgs_needed <- c("ggplot2","tidyr","dplyr","maps","lubridate","readr")
+letsinstall <- setdiff(pkgs_needed, installed.packages()) 
+if (length(letsinstall) > 0) {
+  install.packages(letsinstall)
+}
+```
+
+Gathering and importing data:
+Time-series raw data is taken from John Hopkins Github repository. This contains time-series data from 24th March 2020 to as on date. 3separate csv files are available for confirmed, recovered and deaths. All 3 are imported.
+Note: Rows in these datasets are cumulative. They aren't really daily case count.
+
+```{r}
+library(readr)
+urlfile_confirmed<-"https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv" #assigning confirmed case path to variable
+urlfile_deaths<-"https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv" #assigning death case path to variable
+urlfile_recovered<-"https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_recovered_global.csv" #assigning recovered case path to variable
+covid_confirmed_raw<-read_csv(urlfile_confirmed,'show_col_types'=FALSE) #Importing data for confirmed,death and recovered
+covid_deaths_raw<-read_csv(urlfile_deaths,'show_col_types'=FALSE)
+covid_recovered_raw<-read_csv(urlfile_recovered,'show_col_types'=FALSE)
+```
+
+We will be using this data in Section 6 onwards for analysing socio economic impact
+```{r}
+covid_humandev_raw<-read_csv("owid-covid-data.csv",'show_col_types'=FALSE)
+```
+
+DATA CLEANUP:
+The data from John hopkins has cases tabulated along columns for each country on date basis. This is converted from Columns to rows. Pivot longer is used to reduce columns and increase rows.
+There is one major issue with the data. The subsequent columns are in cumulative form and wrongly labelled as daily cases in John Hopkins website.
+Hence, first grouped by country,then date is converted from character to date form, then sorted by date and then daily cases are calculated.This is repeated for deaths and recovered datsets as well. Although, this could have been performed post combining all of them, carried out separately to spot any issues in mutation and to compare with real time data.
+```{r}
+library(lubridate)
+library(tidyr)
+library(dplyr)
+
+covid_confirmed<-covid_confirmed_raw%>%pivot_longer(-c(`Province/State`,`Country/Region`,`Lat`,`Long`),names_to = "Date",values_to="Confirmed")%>%tibble()%>%rename(Country=`Country/Region`,State=`Province/State`)%>%group_by(Country,Date)%>%summarise(Confirmed=sum(Confirmed))%>%mutate(Date=mdy(Date))%>%arrange(Date,.by_group=T)%>%mutate(DailyCaseCount=Confirmed-lag(Confirmed,default=0)) #Converts rows to cols renames cols and performs data corrections
+
+covid_recovered<-covid_recovered_raw%>%pivot_longer(-c(`Province/State`,`Country/Region`,`Lat`,`Long`),names_to = "Date",values_to="Recovered")%>%tibble()%>%rename(Country=`Country/Region`,State=`Province/State`)%>%group_by(Country,Date)%>%summarise(Recovered=sum(Recovered))%>%mutate(Date=mdy(Date))%>%arrange(Date,.by_group=T)%>%mutate(DailyrecoveryCount=Recovered-lag(Recovered,default=0)) #Converts rows to cols renames cols and performs data corrections
+
+covid_deaths<-covid_deaths_raw%>%pivot_longer(-c(`Province/State`,`Country/Region`,`Lat`,`Long`),names_to = "Date",values_to="Deaths")%>%tibble()%>%rename(Country=`Country/Region`,State=`Province/State`)%>%group_by(Country,Date)%>%summarise(Deaths=sum(Deaths))%>%mutate(Date=mdy(Date))%>%arrange(Date,.by_group=T)%>%mutate(DailydeathCount=Deaths-lag(Deaths,default=0)) #Converts rows to cols renames cols and performs data corrections
+```
+
+Then all three datasets are joined and days are calculated
+```{r}
+covid_grand<-covid_confirmed%>%left_join(covid_deaths)%>%left_join(covid_recovered)%>%mutate(Days=Date - first(Date) + 1) #Joins three datasets, join by isnt used since they are all from same source and in same order.Number of days is computed
+```
+
+covid_grand is going to be the master data that would be used throughout for various visualization
+
+Analysing data for the World on timeseries level. How has the covid increased and how CFR varied over time
+
+SECTION 1:
+WORLD DATA
+```{r}
+covid_world<-covid_grand%>%group_by(Date)%>%summarise(Confirmed=sum(DailyCaseCount),Deaths=sum(DailydeathCount),Recovered=sum(DailyrecoveryCount))%>%mutate(CFR=Deaths/Confirmed*100)%>%mutate(Days = Date - first(Date) + 1) #Generates subset from master dataset,counts parameters across all countries, calculates days
+```
+
+Plotting
+```{r}
+library(ggplot2) #This plots daily confirmed cases across globe
+ggplot(data=covid_world, mapping=aes(x=Date, y=Confirmed, color=Date>as.Date("2021-11-24"))) + 
+  geom_bar(stat="identity", width=1) +
+  theme_classic() +
+  labs(title = "Covid-19 Global Confirmed Cases", x= "Date", y= "Daily confirmed cases",color = "before and post omicron") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+Omicron was first detected on 24th Novemeber 2021 in South Africa. This graph is clearly showing impact of Omicron on case count. Variant is highly transmissible and case count has more than quadrupled compared to other variants.
+
+What about case fatality rate?
+Following code plots daily deaths on primary y axis and case fatality ratio on secondary axis
+
+```{r,echo=F}
+ggplot(data=covid_world, mapping=aes(x=Date, y=Deaths, color=Date>as.Date("2021-11-24"))) + 
+  geom_bar(stat="identity", width=1) +
+  geom_line(aes(x=Date,y=2000*CFR),col="black")+
+  scale_y_continuous("Deaths",sec.axis=sec_axis(~./10000,name="Case fatality ratio"))+
+  #This plots deaths across globe on primary axis and Case fatality on secondary axis, helps visulaise the impact of different variants
+  theme_classic() +
+  labs(title = "Covid-19 Global Covid Death",color = "before and post omicron") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+The black line in the graph represents case fatality ratio and it clearly shows that CFR was highest for alpha variant and delta variant, but CFR is least in omicron. This could be because variant is less fatal or vaccination is higher or combination of both
+
+To compare impact of COVID on two most affected countries: US and India.
+```{r}
+covid_india<-covid_grand%>%filter(Country=="India")
+covid_usa<-covid_grand%>%filter(Country=="US")
+```
+
+
+```{r}
+library(ggplot2) #This plots daily confirmed cases across globe to which US and India data is added
+ggplot() + 
+  geom_bar(data=covid_world, mapping=aes(x=Date, y=Confirmed, color=Date>as.Date("2021-11-24")),stat="identity", width=1) +
+  geom_line(data=covid_india,aes(x=Date, y=DailyCaseCount),color='black')+ #India data
+  geom_line(data=covid_usa,aes(x=Date, y=DailyCaseCount),color='green')+ 
+  #US data
+  theme_classic() +
+  labs(title = "Covid-19 Global Confirmed Cases vs India vs US", x= "Date", y= "Daily confirmed cases",
+       color = "before and post omicron") +
+#scale_colour_manual("",breaks=c("India","US"),values=c("India"='black',"US",'green'))+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Green line indicates US cases and black line indicates India cases. It shows US has followed the trajectory of Global coronavirus cases.It has suffered most during alpha phase. India on other hand indicated by black line has had relative lower case count until delta variant and has suffered the most in that phase.
+
+SECTION 2:
+WORST AFFECTED COUNTRIES
+
+Now, that we understand the impact of virus on world level, relative fatality by different variants, we could analyse how Covid has impacted countries.
+
+```{r}
+covid_country<-covid_grand%>%group_by(Country)%>%summarise(Confirmed=sum(DailyCaseCount),Deaths=sum(DailydeathCount),Recovered=sum(DailyrecoveryCount))%>%mutate(CFR=Deaths/Confirmed*100) #This creates Country wise subset tibble, counting all cases till date
+```
+
+Using this to answer some of the questions.
+Question 1: Which are the top 10 countries affected?
+```{r}
+Covid_highestconfirmed<-covid_country%>%arrange(desc(Confirmed))%>%slice_head(n=10)
+Covid_highestconfirmed #Slicing dataset to find top 10 affected countries
+```
+
+Question 2: Which are the top 10 countries with most number of deaths?
+```{r}
+Covid_highestdeaths<-covid_country%>%arrange(desc(Deaths))%>%slice_head(n=10)
+Covid_highestdeaths
+#Slicing dataset to find top 10 affected countries by death
+```
+
+The above table is particularly interesting as we see countries such as Mexico, Peru having higher deaths than the countries which has higher confirmed cases. Would this mean, that fatality rate is highest in these countries?
+
+Question 3: Which are the top 10 countries with highest Case fatality ratio?
+```{r}
+Covid_highestCFR<-covid_country%>%arrange(desc(CFR))%>%slice_head(n=10)
+Covid_highestCFR
+
+```
+
+This is a very interesting table, however could be misleading. Hence, taking the CFR of countries with confirmed count greater than 100000 cases.However, best would be to take population as a metric, but even with lesser population, if severity is high, impact might be missed during analysis.
+
+Question 4
+```{r}
+Covid_highestCFR2<-covid_country%>%filter(Confirmed>100000)%>%arrange(desc(CFR))%>%slice_head(n=10)
+Covid_highestCFR2
+
+```
+
+This table shows that its not US or India that is worst affected but rather its Peru, Mexico which are affected the most from fatality perspective
+
+SECTION 3:
+IMPACT OF OMICRON VARIANT.(Note: Could be misleading since data doesnt say about percentage of alpha, delta variant in circulation)
+Analyzing all these data post detection of Omicron, this is not to say that all these are for omicron alone, but rather to say how tables got rearranged post detection
+
+```{r}
+covid_Omicron<-covid_grand%>%filter(Date>as.Date("2021-11-24"))%>%group_by(Country)%>%summarise(Confirmed=sum(DailyCaseCount),Deaths=sum(DailydeathCount),Recovered=sum(DailyrecoveryCount))%>%mutate(CFR=Deaths/Confirmed*100) #This is to apply filter to only take those parameters which are post detecting omicron
+```
+
+Using this to answer some of the questions.
+Question 5: Which are the top 10 countries affected post omicron detection?
+```{r}
+Covid_highestconfirmed<-covid_Omicron%>%arrange(desc(Confirmed))%>%slice_head(n=10)
+Covid_highestconfirmed #Slicing dataset to find top 10 affected countries
+```
+The table now shows a rearrangement. India, Brazil which were in 2nd, 3rd in earlier table seems to have moved down,
+
+Question 6: Which are the top 10 countries with most number of deaths post Omicron detection?
+```{r}
+Covid_highestdeaths<-covid_Omicron%>%arrange(desc(Deaths))%>%slice_head(n=10)
+Covid_highestdeaths
+#Slicing dataset to find top 10 affected countries by death
+```
+New countries such as Poland and ukraine seems to be taking up place. This could be because countries which were earlier leading in death counts could be having lesser deaths or there could be newer variant in these countries.
+
+Question 7: Which are the top 10 countries with highest Case fatality ratio?
+```{r}
+Covid_highestCFR<-covid_Omicron%>%arrange(desc(CFR))%>%slice_head(n=10)
+Covid_highestCFR
+
+```
+
+
+Question 8
+```{r}
+Covid_highestCFR2<-covid_Omicron%>%filter(Confirmed>100000)%>%arrange(desc(CFR))%>%slice_head(n=10)
+Covid_highestCFR2
+
+```
+
+This is again an important since it shows impact being severe in East european nations as opposed to US, India
+
+SECTION 4:
+PLOTTING IMPACT ON WORLD MAP
+The code is used to obtain latitude and longitude from original dataset and merge with existing data
+```{r}
+library(maps)
+map_world<-map_data("world") #Obtaining map data of world using map package
+
+country_latlong<-covid_confirmed_raw%>%tibble()%>%rename(Country=`Country/Region`)%>%group_by(Country)%>%select(Country,Lat,Long)%>%distinct(Country,.keep_all=T) #Obtaining lat and long from original datasets
+
+covid_country<-covid_country%>%left_join(country_latlong,by="Country") #Adding latitude and longitude data
+covid_Omicron<-covid_Omicron%>%left_join(country_latlong,by="Country")
+
+```
+
+Plotting this data on world map to generate 4D. Severity of cases based on size and number of deaths by colour of bubble. Colouring is not done based on countries for better readability
+```{r}
+map_world<-map_data("world")
+ggplot()+
+  geom_map(data=map_world,map=map_world,aes(x=long,y=lat,map_id=region),fill=NA,color="black")+ #Plot world map
+  geom_point(data=covid_country,mapping=aes(x=Long,y=Lat,size=Confirmed,color=Deaths),alpha=0.8)+ #Plot analysed data
+  scale_color_gradient2(low = "blue",mid='green',high = "red")+
+  coord_quickmap()+
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    panel.background = element_rect(fill = "white")) #Remove unwanted elements
+  
+  
+```
+Evaluating the impact on world map post detection of Omicron
+
+```{r}
+map_world<-map_data("world")
+ggplot()+
+  geom_map(data=map_world,map=map_world,aes(x=long,y=lat,map_id=region),fill=NA,color="black")+ #Plot world map
+  geom_point(data=covid_Omicron,mapping=aes(x=Long,y=Lat,size=Confirmed,color=Deaths),alpha=0.8)+ #Plot analysed data
+  scale_color_gradient2(low = "blue",mid='green',high = "red")+
+  coord_quickmap()+
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    panel.background = element_rect(fill = "white")) #Remove unwanted elements
+  
+  
+```
+This plot clearly shows shifting of severity to east european nations
+
+SECTION 5:
+Impact of Covid on countries measured against age, Human development index, population density, stringency index, Vaccines
+The code is used to import our world in data csv, extract socio economic parameters, rename columns, do data cleanup and merge with existing data.
+
+```{r}
+covid_humandev<-covid_humandev_raw%>%tibble()%>%rename(Country=`location`,Date=`date`,Vaccines=`new_vaccinations`,SI=`stringency_index`,PopDensity=`population_density`,Avgage=`median_age`,GDP=`gdp_per_capita`,HDI=`human_development_index`)%>%select(Country,Vaccines,SI,PopDensity,Avgage,GDP,HDI) #new tibble is created which has socio economic data 
+covid_humandev[is.na(covid_humandev)]<-0 #Initialising values to 0 which are missing
+
+covid_humandev<-covid_humandev%>%group_by(Country)%>%summarise(Vaccines=sum(Vaccines),SI=mean(SI),PopDensity=mean(PopDensity),Avgage=mean(Avgage),GDP=mean(GDP),HDI=mean(HDI)) #Computing parameters
+
+```
+
+Joining this new data with the previous dataframe
+
+```{r}
+covid_country_humandev<-covid_country%>%left_join(covid_humandev,by="Country")
+```
+
+SECTION 6: Government measures
+Plotting impact of decisions, human development with CFR as a metric to measure severity of COVID
+
+Question9. Which countries have most and least stringent measures to COVID, has it impacted the outcome in terms of CFR
+```{r}
+Countriesstrict<-covid_country_humandev%>%arrange(desc(SI))%>%slice_head(n=10)
+Countriesstrict
+```
+
+```{r}
+ggplot(data=Countriesstrict,mapping=aes(x=Country,y=CFR))+  
+  geom_bar(stat="identity",aes(fill=PopDensity))+
+  coord_flip()+
+  labs(title="Countries with strict rules")+
+  scale_fill_distiller(palette="Set2",direction=1)
+```
+This shows the countries which has strict policy has CFR under 2, population density is also taken into account
+
+Question 10: Countries with least measures
+```{r}
+Countrieslenient<-covid_country_humandev%>%arrange(SI)%>%slice_head(n=10)
+Countrieslenient
+```
+
+```{r}
+ggplot(data=Countrieslenient,mapping=aes(x=Country,y=CFR))+  
+  geom_bar(stat="identity",aes(fill=PopDensity))+
+  coord_flip()+
+  labs(title="Countries with least rules")+
+  scale_fill_distiller(palette="Set2",direction=1)
+```
+
+These two clearly shows that there is infact impact on CFR based on policies government takes
+
+
+SECTION 7: Vaccinations and age
+Question 11: Which countries have administered maximum number of vaccines
+```{r}
+Countriesvaccines<-covid_country_humandev%>%arrange(desc(Vaccines))%>%slice_head(n=10)
+Countriesvaccines
+```
+
+Question 12: Which are the countries with most senior population and impact on CFR
+```{r}
+Countriesagemost<-covid_country_humandev%>%arrange(desc(Avgage))%>%slice_head(n=10)
+Countriesagemost
+```
+
+
+Japan being the country with oldest population. Does it translate to countries with Highest CFR. NO!
+
+```{r}
+ggplot(data=Countriesagemost,mapping=aes(x=Country,y=CFR))+  
+  geom_bar(stat="identity",aes(fill=Avgage))+
+  coord_flip()+
+  labs(title="Countries with aged population")+
+  scale_fill_distiller(palette="Set2",direction=1)
+```
+
+All the countries seems to be under or close to 1 except Bulgaria
+
+How about young countries?
+```{r}
+Countriesageleast<-covid_country_humandev%>%filter(Avgage>0)%>%arrange(Avgage)%>%slice_head(n=10)
+Countriesageleast
+```
+
+```{r}
+ggplot(data=Countriesageleast,mapping=aes(x=Country,y=CFR))+  
+  geom_bar(stat="identity",aes(fill=Avgage))+
+  labs(title="Countries with young population")+
+  coord_flip()+
+  scale_fill_distiller(palette="Set2",direction=1)
+```
+
+
+This study clearly shows that being YOUNG doesnt gurantee non-fatality. Countries with young population suffer equally or sometimes more than aged countries if measures and vaccines not taken
+
+SECTION 8: Economic development
+```{r}
+Countrieseconomics<-covid_country_humandev%>%arrange(desc(GDP))%>%slice_head(n=10)
+Countrieseconomics
+
+```
+```{r}
+ggplot(data=Countrieseconomics,mapping=aes(x=Country,y=CFR))+  
+  geom_bar(stat="identity",aes(fill=HDI))+
+  coord_flip()+
+  labs(title="Economic development impact")+
+  scale_fill_distiller(palette="Set2",direction=1)
+```
+
+Countries which have placed higher importance on Human development index seems to be the countries with lesser CFR
+
+SUMMARY OF KEY FINDINGS  
+1) Omicron is highly transmissible and total daily cases on global level has more than quadrupled comapred to other variants  
+2) However, case fatality rate is least in Omicron. This suggests variant is more transmissible but least fatal. Alpha and Delta had ~0.5, omicron is less than 0.2.  
+3)Whenever cases in India or US has peaked, global trajectory has followed trend, during alpha phase US peak matches global peak, during delta peak, India's peak matches global peak, during omicron, both seems to be peaking.  
+4) Not all confirmed cases transition to deaths.So, total number of cases doesnt indicate grim state of country, rather Case fatality ratio. Its not US or India or UK that has a grim state, but its countries like Peru and Mexico which have case fatality of over 6. South american nations are worst affected from fatality ratio. (It indicates, there is higher chance of death post contracting virus)  
+5) Post detection of omicron, tables have changed. Its the East european nations which are worst affected  .
+6) Countries with strict stringency measures seems to have lower case fatality than those without. The difference in CFR is almost 0.5%  
+7) China, India, Brazil are the countries which have administered most number of Vaccines. This could be because of higher population count and rapid government response and acceptance of vaccines by general public.  
+8)Japan being the country with highest median population age has lower CFR, countries like Mali and Niger which has younger meadian population age has higher CFR. Though, aged population is vulnerable. This study clearly shows that being YOUNG doesnt gurantee non-fatality. Countries with young population suffer equally or sometimes more than aged countries if measures and vaccines not taken.  
+9) Countries with higher human development index seems to be the country with least CFR. Countries which are rich but have poorer HDI seems to have higher CFR  
+
+
+Comments: Scope was added in addition to proposal. Economic development impact, Stringency were studied in addition to age. Reliable gender data wasn't able to segregate impact on gender.
+In addition, as per suggestion to proposal, impact of omicron was studied and plotted and it showed interesting outcomes. East european countries being worst affected than others.
